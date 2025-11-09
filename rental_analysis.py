@@ -76,6 +76,12 @@ CONFIG = {
     'api_rate_limit_delay': 0.2,  # Seconds to wait between API calls to respect rate limits
     'max_listings_per_request': 50,  # Maximum listings to fetch per API call
     'max_api_calls': 70,  # Maximum total API calls to make
+    # Property Type Filtering
+    # Set include_property_types to specify which types to include (e.g., ['Single Family', 'Condo', 'Townhouse'])
+    # Set exclude_property_types to specify which types to exclude (e.g., ['Apartment', 'Multi-Family'])
+    # If include_property_types is set, it takes precedence over exclude_property_types
+    'include_property_types': None,  # None = include all, or list like ['Single Family', 'Condo', 'Townhouse']
+    'exclude_property_types': ['Apartment'],  # List of property types to exclude (case-sensitive)
 }
 
 # Global API call counter (for limiting total calls)
@@ -251,6 +257,12 @@ def _fetch_rentcast_listings(target_area: str, config: Dict, max_calls_for_zip: 
                 'offset': offset
             }
             
+            # Add property type filtering if configured
+            include_types = config.get('include_property_types')
+            if include_types and isinstance(include_types, list):
+                # RentCast API accepts comma-separated property types
+                params['propertyType'] = ','.join(include_types)
+            
             logger.info(f"Fetching listings for ZIP {area_info['zip_code']} (offset {offset}, API call {_api_call_count + 1}/{max_calls})")
             response = requests.get(url, headers=headers, params=params)
             _api_call_count += 1
@@ -298,6 +310,12 @@ def _fetch_rentcast_listings(target_area: str, config: Dict, max_calls_for_zip: 
                 'limit': limit_per_call,
                 'offset': offset
             }
+            
+            # Add property type filtering if configured
+            include_types = config.get('include_property_types')
+            if include_types and isinstance(include_types, list):
+                # RentCast API accepts comma-separated property types
+                params['propertyType'] = ','.join(include_types)
             
             logger.info(f"Fetching listings for {area_info['city']}, {area_info['state']} (offset {offset}, API call {_api_call_count + 1}/{max_calls})")
             response = requests.get(url, headers=headers, params=params)
@@ -361,6 +379,24 @@ def _fetch_rentcast_listings(target_area: str, config: Dict, max_calls_for_zip: 
         transformed_listings.append(transformed)
     
     df = pd.DataFrame(transformed_listings)
+    
+    # Post-fetch filtering by property type (backup if API filtering didn't work or for exclude list)
+    if not df.empty:
+        exclude_types = config.get('exclude_property_types', [])
+        include_types = config.get('include_property_types')
+        
+        if include_types and isinstance(include_types, list):
+            # Filter to only include specified types
+            df = df[df['property_type'].isin(include_types)]
+            logger.info(f"Filtered to {len(df)} listings matching included property types: {include_types}")
+        elif exclude_types and isinstance(exclude_types, list):
+            # Filter out excluded types
+            initial_count = len(df)
+            df = df[~df['property_type'].isin(exclude_types)]
+            excluded_count = initial_count - len(df)
+            if excluded_count > 0:
+                logger.info(f"Excluded {excluded_count} listings with property types: {exclude_types}")
+    
     logger.info(f"Fetched {len(df)} unique listings from RentCast API")
     return df
 
@@ -845,6 +881,7 @@ def analyze_properties(
             'city': property_dict.get('city', ''),
             'state': property_dict.get('state', ''),
             'zip_code': str(property_dict.get('zip_code', '')),
+            'property_type': str(property_dict.get('property_type', '')),
             'listing_price': float(listing_price) if pd.notna(listing_price) else 0.0,
             'down_payment': float(down_payment) if pd.notna(down_payment) else 0.0,
             'loan_amount': float(loan_amount) if pd.notna(loan_amount) else 0.0,
@@ -940,7 +977,7 @@ def main():
     _api_call_count = 0
     
     # Configuration
-    zip_codes = ["19146", "19147", "19107", "19103"]  # ZIP codes to analyze
+    zip_codes = ["19146", "19147", "19107", "19103", "19109", "19125", "19104", "19132", "19106"]  # ZIP codes to analyze
     output_csv = "analyzed_properties.csv"
     
     # Check if API key is set
